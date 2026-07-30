@@ -87,6 +87,7 @@ class BackgroundServiceManager {
               lowerText.contains('accept trip');
 
           if (isTargetPkg || hasRideKeywords) {
+            debugPrint("[RideBuddy Accessibility Captured] ($pkg): $combinedText");
             _processRawText(combinedText, pkg, storageService);
           }
         });
@@ -140,6 +141,8 @@ class BackgroundServiceManager {
     return texts.join(' ');
   }
 
+  String? _lastCapturedFareKey;
+
   void _processRawText(String rawText, String packageName, StorageService storage) async {
     final settings = storage.getSettings();
     final fareResult = ParserEngine.parse(
@@ -148,8 +151,14 @@ class BackgroundServiceManager {
       settings: settings,
     );
 
-    // Only present overlay and record if fare or distance was extracted
-    if (fareResult.grossFare > 0 || fareResult.totalDistanceKm > 0) {
+    // Only present overlay and record if BOTH gross fare AND distance are extracted
+    if (fareResult.grossFare > 0 && fareResult.totalDistanceKm > 0) {
+      final fareKey = "${fareResult.platform}_${fareResult.grossFare}_${fareResult.totalDistanceKm.toStringAsFixed(1)}";
+      
+      // Prevent spamming identical calculations 50 times per second
+      if (_lastCapturedFareKey == fareKey) return;
+      _lastCapturedFareKey = fareKey;
+
       await storage.saveFareResult(fareResult);
 
       if (settings.autoShowOverlay) {

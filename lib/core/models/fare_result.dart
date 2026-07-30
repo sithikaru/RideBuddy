@@ -34,6 +34,8 @@ class FareResult {
     return netFare / totalDistanceKm;
   }
 
+  bool get isProfitable => profitLevel == ProfitLevel.high || profitLevel == ProfitLevel.moderate;
+
   ProfitLevel get profitLevel {
     if (totalDistanceKm <= 0 || netFare <= 0) return ProfitLevel.unknown;
     if (farePerKm >= targetThresholdPerKm) {

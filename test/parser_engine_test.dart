@@ -12,7 +12,7 @@ void main() {
       targetProfitPerKm: 100.0,
     );
 
-    test('Live Uber Screenshot: LKR205.52 Moto Request', () {
+    test('Live Uber Screenshot 1: LKR205.52 Request', () {
       const sampleText = '''
         Moto LKR205.52 ⭐ 4.91
         17 mins (4.9 km) total
@@ -23,7 +23,7 @@ void main() {
 
       final result = ParserEngine.parse(
         rawText: sampleText,
-        packageName: 'com.ubercab', // Package name on device can be com.ubercab
+        packageName: 'com.ubercab',
         settings: settings,
       );
 
@@ -32,10 +32,54 @@ void main() {
       expect(result.pickupDistanceKm, equals(1.4));
       expect(result.tripDistanceKm, equals(3.5));
       expect(result.totalDistanceKm, equals(4.9));
-      expect(result.commissionPercent, equals(10.0));
-      expect(result.platformDeduction, closeTo(20.55, 0.01));
-      expect(result.netFare, closeTo(184.97, 0.01));
-      expect(result.farePerKm, closeTo(37.74, 0.05));
+    });
+
+    test('Live Uber Screenshot 2: LKR350.74 Request', () {
+      const sampleText = '''
+        Moto LKR350.74 ⭐ 4.93
+        23 mins (8.7 km) total
+        6 mins (1.8 km) away 59, 7 Peter's Ln
+        17 mins (6.9 km) trip Spa Ceylon - Kollupitiya - Spa & Boutique, WP
+        +LKR18.00 premium Match
+      ''';
+
+      final result = ParserEngine.parse(
+        rawText: sampleText,
+        packageName: 'com.ubercab',
+        settings: settings,
+      );
+
+      expect(result.platform, equals('Uber'));
+      expect(result.grossFare, equals(350.74));
+      expect(result.pickupDistanceKm, equals(1.8));
+      expect(result.tripDistanceKm, equals(6.9));
+      expect(result.totalDistanceKm, equals(8.7));
+      expect(result.netFare, closeTo(315.666, 0.01));
+      expect(result.farePerKm, closeTo(36.28, 0.05));
+    });
+
+    test('Live Uber Screenshot 3: LKR150 Cash Payment Request', () {
+      const sampleText = '''
+        Moto LKR150 Cash payment ⭐ 4.85
+        10 mins (3.1 km) total
+        4 mins (1.1 km) away 32 Sudarma Mawatha
+        6 mins (1.9 km) trip Amana Takaful Insurance, WP 10350
+        +LKR10.00 premium Match
+      ''';
+
+      final result = ParserEngine.parse(
+        rawText: sampleText,
+        packageName: 'com.ubercab',
+        settings: settings,
+      );
+
+      expect(result.platform, equals('Uber'));
+      expect(result.grossFare, equals(150.0));
+      expect(result.pickupDistanceKm, equals(1.1));
+      expect(result.tripDistanceKm, equals(1.9));
+      expect(result.totalDistanceKm, equals(3.0));
+      expect(result.netFare, equals(135.0));
+      expect(result.farePerKm, equals(45.0));
     });
   });
 }

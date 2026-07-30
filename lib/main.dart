@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:system_alert_window/system_alert_window.dart';
 import 'core/models/fare_result.dart';
 
 import 'core/parser/parser_engine.dart';
@@ -24,6 +25,102 @@ void main() async {
       child: const RideBuddyApp(),
     ),
   );
+}
+
+// Entry point required by system_alert_window plugin for floating overlay rendering
+@pragma('vm:entry-point')
+void overlayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: OverlayWidget(),
+    ),
+  );
+}
+
+class OverlayWidget extends StatefulWidget {
+  const OverlayWidget({super.key});
+
+  @override
+  State<OverlayWidget> createState() => _OverlayWidgetState();
+}
+
+class _OverlayWidgetState extends State<OverlayWidget> {
+  String _title = "RideBuddy";
+  String _body = "Monitoring fares...";
+  bool _isProfitable = true;
+
+  @override
+  void initState() {
+    super.initState();
+    SystemAlertWindow.overlayListener.listen((data) {
+      if (data is Map) {
+        setState(() {
+          _title = data['title']?.toString() ?? _title;
+          _body = data['body']?.toString() ?? _body;
+          _isProfitable = data['isProfitable'] as bool? ?? true;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = _isProfitable ? Colors.greenAccent : Colors.redAccent;
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        margin: const EdgeInsets.all(6),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xEE1E1E1E),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: statusColor, width: 2),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _isProfitable ? Icons.check_circle : Icons.warning_amber_rounded,
+                  color: statusColor,
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _title,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _body,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class RideBuddyApp extends ConsumerWidget {

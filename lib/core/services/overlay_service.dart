@@ -17,7 +17,7 @@ class OverlayService {
   }
 
   /// Show or update the floating profit pill overlay window on screen.
-  /// Uses non-focusable & non-touch-modal flags so touches pass through cleanly to driver apps.
+  /// Sends calculated fare data to the overlay widget in real time.
   static Future<void> showProfitOverlay(FareResult fare) async {
     final hasPerm = await checkPermission();
     if (!hasPerm) {
@@ -32,7 +32,8 @@ class OverlayService {
     await SystemAlertWindow.showSystemWindow(
       notificationTitle: title,
       notificationBody: body,
-      height: 110,
+      width: 340,
+      height: 90,
       gravity: SystemWindowGravity.TOP,
       prefMode: SystemWindowPrefMode.OVERLAY,
       layoutParamFlags: [
@@ -41,7 +42,15 @@ class OverlayService {
       ],
     );
 
-    // Auto-close overlay after 12 seconds so screen stays clean
+    // Send payload to OverlayWidget inside overlayMain
+    await SystemAlertWindow.sendMessageToOverlay({
+      "title": title,
+      "body": body,
+      "platform": fare.platform,
+      "isProfitable": fare.isProfitable,
+    });
+
+    // Auto-close overlay after 12 seconds
     Future.delayed(const Duration(seconds: 12), () {
       closeOverlay();
     });
