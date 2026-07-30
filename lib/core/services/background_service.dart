@@ -61,21 +61,29 @@ class BackgroundServiceManager {
     }
   }
 
+  bool isRunning = false;
+
   /// Start background monitoring for screen text and notifications
   Future<void> startService(StorageService storageService) async {
     stopService();
+    isRunning = true;
 
     // 1. Accessibility Event Listener
     try {
       final isGranted = await isAccessibilityGranted();
       if (isGranted) {
         _accessibilitySub = FlutterAccessibilityService.accessStream.listen((event) {
-          final pkg = event.packageName ?? '';
-          final combinedText = _extractAllText(event);
+          if (!isRunning) return;
 
+          final pkg = event.packageName ?? '';
+          final lowerPkg = pkg.toLowerCase();
+
+          // Never parse RideBuddy's own screen UI text!
+          if (lowerPkg.contains('ridebuddy')) return;
+
+          final combinedText = _extractAllText(event);
           if (combinedText.isEmpty) return;
 
-          final lowerPkg = pkg.toLowerCase();
           final lowerText = combinedText.toLowerCase();
 
           final isTargetPkg = targetPackages.any((p) => lowerPkg.contains(p));
@@ -103,12 +111,15 @@ class BackgroundServiceManager {
       final isNotifGranted = await isNotificationListenerGranted();
       if (isNotifGranted) {
         _notificationSub = NotificationListenerService.notificationsStream.listen((ServiceNotificationEvent event) {
+          if (!isRunning) return;
+
           final pkg = event.packageName ?? '';
+          final lowerPkg = pkg.toLowerCase();
+          if (lowerPkg.contains('ridebuddy')) return;
+
           final title = event.title ?? '';
           final content = event.content ?? '';
           final fullNotif = "$title $content";
-
-          final lowerPkg = pkg.toLowerCase();
           final lowerText = fullNotif.toLowerCase();
 
           final isTargetPkg = targetPackages.any((p) => lowerPkg.contains(p));
@@ -174,6 +185,7 @@ class BackgroundServiceManager {
   }
 
   void stopService() {
+    isRunning = false;
     _accessibilitySub?.cancel();
     _accessibilitySub = null;
     _notificationSub?.cancel();

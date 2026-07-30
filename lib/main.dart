@@ -242,6 +242,113 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> wit
   }
 }
 
+class ServicePowerButton extends ConsumerStatefulWidget {
+  const ServicePowerButton({super.key});
+
+  @override
+  ConsumerState<ServicePowerButton> createState() => _ServicePowerButtonState();
+}
+
+class _ServicePowerButtonState extends ConsumerState<ServicePowerButton> with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bgManager = ref.watch(backgroundServiceManagerProvider);
+    final storage = ref.watch(storageServiceProvider);
+    final isRunning = bgManager.isRunning;
+
+    final color = isRunning ? const Color(0xFF00E676) : Colors.white38;
+    final glowColor = isRunning ? const Color(0x6600E676) : Colors.transparent;
+
+    return Center(
+      child: Column(
+        children: [
+          GestureDetector(
+            onTap: () {
+              if (isRunning) {
+                bgManager.stopService();
+                OverlayService.closeOverlay();
+              } else {
+                bgManager.startService(storage);
+              }
+              setState(() {});
+            },
+            child: ScaleTransition(
+              scale: isRunning ? _scaleAnimation : const AlwaysStoppedAnimation(1.0),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 350),
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isRunning ? const Color(0xFF1E2D24) : const Color(0xFF1E1E1E),
+                  border: Border.all(
+                    color: color,
+                    width: 3.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: glowColor,
+                      blurRadius: isRunning ? 24 : 0,
+                      spreadRadius: isRunning ? 4 : 0,
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  Icons.power_settings_new_rounded,
+                  color: color,
+                  size: 48,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(
+              isRunning ? 'MONITORING ACTIVE' : 'MONITORING PAUSED',
+              key: ValueKey(isRunning),
+              style: TextStyle(
+                color: isRunning ? const Color(0xFF00E676) : Colors.white54,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isRunning
+                ? 'Listening for Uber & PickMe fare offers...'
+                : 'Tap power button to enable background monitoring',
+            style: const TextStyle(color: Colors.white38, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class DashboardTab extends ConsumerWidget {
   const DashboardTab({super.key});
 
@@ -279,6 +386,8 @@ class DashboardTab extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const ServicePowerButton(),
+              const SizedBox(height: 24),
               _buildTargetSummaryCard(settings),
               const SizedBox(height: 24),
               Row(
