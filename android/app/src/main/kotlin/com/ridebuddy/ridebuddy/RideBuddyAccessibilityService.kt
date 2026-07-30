@@ -13,18 +13,12 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONObject
-import java.util.LinkedList
 
 /**
  * RideBuddyAccessibilityService — Pure native Kotlin AccessibilityService.
  *
- * KEY DESIGN DECISIONS:
- *  - NO FlutterEngineCache dependency (that's what kills flutter_accessibility_service in background)
- *  - Runs completely independently of the Flutter engine lifecycle
- *  - Communicates results via SharedPreferences (Flutter reads on resume)
- *  - Posts a native Android heads-up notification for real-time alerts
- *  - Strictly filters its own package (com.ridebuddy.ridebuddy) to prevent spamming own UI text
- *  - Only triggers on WINDOW_CONTENT_CHANGED + WINDOW_STATE_CHANGED for efficiency
+ * Monitors ONLY driver apps for fare offers. Completely independent of Flutter.
+ * Writes fare results to SharedPreferences; Flutter reads on resume via MethodChannel.
  */
 class RideBuddyAccessibilityService : AccessibilityService() {
 
@@ -36,43 +30,45 @@ class RideBuddyAccessibilityService : AccessibilityService() {
         const val CHANNEL_ID = "ridebuddy_fare_channel"
         const val NOTIF_ID = 9001
 
-        // Target packages to monitor
-        private val TARGET_PACKAGES = setOf(
-            "com.ubercab.driver",
-            "com.ubercab",
-            "com.pickme.driver.byod",
-            "com.pickme.driver",
-            "lk.bhasha.helago.driver",
+        // ── EXACT package names confirmed from device via `adb shell pm list packages` ──
+        // Separate rider apps from driver apps — we ONLY want driver apps!
+        val TARGET_DRIVER_PACKAGES = setOf(
+            "com.ubercab.driver",       // Uber Driver
+            "com.pickme.driver.byod",   // PickMe Driver (BYOD)
+            "lk.bhasha.helago.driver",  // Helago Driver
         )
 
-        // Our own package — NEVER process these events
+        // Rider apps — NOT targets (driver doesn't use these for fare offers)
+        // "com.ubercab"           ← Uber rider app  (skip)
+        // "com.pickme.passenger"  ← PickMe rider app (skip)
+
         private const val OWN_PACKAGE = "com.ridebuddy.ridebuddy"
     }
 
-    // Deduplication: track last sent fare key to avoid spam
     private var lastFareKey: String? = null
     private var lastFareTime: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.i(TAG, "RideBuddyAccessibilityService connected successfully ✅")
+        Log.i(TAG, "✅ RideBuddyAccessibilityService CONNECTED")
 
-        // Configure dynamically (belt + suspenders over static XML config)
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = 300
         info.flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        // NOTE: Do NOT set packageNames here — let all events through, filter in code
         serviceInfo = info
 
-        // Mark service as running in SharedPreferences
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putBoolean(PREFS_KEY_SERVICE_RUNNING, true)
             .apply()
 
         createNotificationChannel()
+        Log.i(TAG, "Monitoring driver packages: $TARGET_DRIVER_PACKAGES")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -80,31 +76,38 @@ class RideBuddyAccessibilityService : AccessibilityService() {
 
         val pkg = event.packageName?.toString() ?: return
 
-        // ── CRITICAL FILTER: Never read our own app's screen ──────────────────
-        if (pkg == OWN_PACKAGE || pkg.contains("ridebuddy")) return
+        // ── FILTER 1: Block our own app ──────────────────────────────────────
+        if (pkg == OWN_PACKAGE) return
 
-        // ── Only process target driver apps ───────────────────────────────────
-        val isTargetPkg = TARGET_PACKAGES.any { pkg.contains(it) || it.contains(pkg) }
-        if (!isTargetPkg) return
+        // ── FILTER 2: Only process known driver apps ─────────────────────────
+        if (!TARGET_DRIVER_PACKAGES.contains(pkg)) return
 
-        // ── Extract text from this window's full node tree ───────────────────
-        val root = rootInActiveWindow ?: return
+        Log.d(TAG, "Event from $pkg type=${event.eventType}")
+
+        // ── Extract all text from the entire window tree ─────────────────────
+        val root = rootInActiveWindow
+        if (root == null) {
+            Log.d(TAG, "rootInActiveWindow is null for $pkg")
+            return
+        }
+
         val texts = mutableListOf<String>()
-        extractNodeTexts(root, texts, depth = 0, maxDepth = 25)
+        extractNodeTexts(root, texts, depth = 0, maxDepth = 30)
         root.recycle()
 
         if (texts.isEmpty()) return
 
         val fullText = texts.joinToString(" ")
-
-        // Quick early reject: must contain a currency marker to be a fare screen
         val lower = fullText.lowercase()
-        val hasCurrency = lower.contains("lkr") || lower.contains("rs.")
-        if (!hasCurrency) return
 
-        Log.d(TAG, "[$pkg] Captured text: ${fullText.take(200)}")
+        // ── FILTER 3: Must have a currency marker ────────────────────────────
+        if (!lower.contains("lkr") && !lower.contains("rs.") && !lower.contains("rs ")) {
+            return
+        }
 
-        // ── Parse fare data ──────────────────────────────────────────────────
+        Log.i(TAG, "[$pkg] Text captured (${fullText.length} chars): ${fullText.take(300)}")
+
+        // ── Parse ────────────────────────────────────────────────────────────
         val platform = detectPlatform(pkg, lower)
         val grossFare = extractGrossFare(fullText)
         val distances = extractDistances(fullText)
@@ -112,22 +115,26 @@ class RideBuddyAccessibilityService : AccessibilityService() {
         val tripKm = distances["trip"] ?: 0.0
         val totalKm = pickupKm + tripKm
 
-        // Validate: must have a fare AND at least one distance
-        if (grossFare <= 0.0 || totalKm < 0.3 || totalKm > 200.0) {
-            Log.d(TAG, "Rejected: fare=$grossFare totalKm=$totalKm")
+        if (grossFare <= 0.0) {
+            Log.d(TAG, "No fare found in text")
             return
         }
 
-        // ── Deduplication ────────────────────────────────────────────────────
-        val fareKey = "${platform}_${grossFare.toInt()}_${totalKm.format1}"
+        if (totalKm < 0.3 || totalKm > 200.0) {
+            Log.d(TAG, "Implausible distance: ${totalKm}km — skipping")
+            return
+        }
+
+        // ── Deduplication (same fare within 30s = skip) ──────────────────────
+        val fareKey = "${platform}_${grossFare.toInt()}_${String.format("%.1f", totalKm)}"
         val now = System.currentTimeMillis()
         if (fareKey == lastFareKey && (now - lastFareTime) < 30_000L) {
-            return // Same fare within 30 seconds — skip
+            return
         }
         lastFareKey = fareKey
         lastFareTime = now
 
-        // ── Read settings from SharedPreferences ─────────────────────────────
+        // ── Load settings from SharedPreferences ─────────────────────────────
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val uberCommission = prefs.getFloat("uber_commission", 10.0f).toDouble()
         val pickmeCommission = prefs.getFloat("pickme_commission", 15.0f).toDouble()
@@ -145,7 +152,9 @@ class RideBuddyAccessibilityService : AccessibilityService() {
         val farePerKm = if (totalKm > 0) netFare / totalKm else 0.0
         val isProfitable = farePerKm >= targetPerKm
 
-        Log.i(TAG, "✅ FARE: $platform Rs.$grossFare | ${totalKm.format1}km | Rs.${farePerKm.format1}/km | profitable=$isProfitable")
+        Log.i(TAG, "✅ FARE RESULT: $platform Rs.${String.format("%.0f",grossFare)} | " +
+                "${String.format("%.1f",totalKm)}km | " +
+                "Rs.${String.format("%.1f",farePerKm)}/km | profitable=$isProfitable")
 
         // ── Save to SharedPreferences for Flutter to read ────────────────────
         val fareJson = JSONObject().apply {
@@ -165,23 +174,22 @@ class RideBuddyAccessibilityService : AccessibilityService() {
 
         prefs.edit().putString(PREFS_KEY_LATEST_FARE, fareJson).apply()
 
-        // ── Show heads-up notification ────────────────────────────────────────
+        // ── Post heads-up notification ────────────────────────────────────────
         showFareNotification(platform, grossFare, netFare, totalKm, farePerKm, isProfitable)
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "RideBuddyAccessibilityService interrupted")
+        Log.w(TAG, "Service interrupted")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .putBoolean(PREFS_KEY_SERVICE_RUNNING, false)
-            .apply()
-        Log.w(TAG, "RideBuddyAccessibilityService destroyed")
+            .putBoolean(PREFS_KEY_SERVICE_RUNNING, false).apply()
+        Log.w(TAG, "Service destroyed")
     }
 
-    // ── Text Extraction ───────────────────────────────────────────────────────
+    // ── Text extraction ───────────────────────────────────────────────────────
 
     private fun extractNodeTexts(
         node: AccessibilityNodeInfo?,
@@ -191,7 +199,6 @@ class RideBuddyAccessibilityService : AccessibilityService() {
     ) {
         if (node == null || depth > maxDepth) return
 
-        // Collect text or content description
         val txt = node.text?.toString()?.trim()
         if (!txt.isNullOrEmpty() && txt != "null") {
             results.add(txt)
@@ -207,106 +214,93 @@ class RideBuddyAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── Platform Detection ────────────────────────────────────────────────────
+    // ── Platform detection ────────────────────────────────────────────────────
 
     private fun detectPlatform(pkg: String, lowerText: String): String {
-        if (pkg.contains("ubercab") || pkg.contains("uber")) return "Uber"
-        if (pkg.contains("pickme")) return "PickMe"
-        if (pkg.contains("helago")) return "Helago"
-
-        // Fallback: text signatures
-        if (lowerText.contains("accept trip") ||
-            lowerText.contains("trip scanner") ||
-            Regex("[0-9.]+\\s*lkr").containsMatchIn(lowerText)
-        ) return "PickMe"
-
-        if (lowerText.contains("match") || lowerText.contains("total") ||
-            Regex("lkr\\s*[0-9.]").containsMatchIn(lowerText)
-        ) return "Uber"
-
-        if (lowerText.contains("helago")) return "Helago"
-
-        return "Driver App"
+        // Package is the most reliable signal
+        return when (pkg) {
+            "com.ubercab.driver" -> "Uber"
+            "com.pickme.driver.byod" -> "PickMe"
+            "lk.bhasha.helago.driver" -> "Helago"
+            else -> "Driver App"
+        }
     }
 
-    // ── Fare Extraction ───────────────────────────────────────────────────────
+    // ── Fare extraction ───────────────────────────────────────────────────────
 
     private fun extractGrossFare(text: String): Double {
         val candidates = mutableListOf<Double>()
 
-        // LKR prefix: LKR270.40, LKR 150, Rs. 850
-        val prefixRe = Regex(
+        // LKR prefix formats: "LKR270.40", "LKR 150", "Rs. 850", "Rs 500"
+        Regex(
             """(?:LKR|Rs\.?|රු\.?|ரூ\.?)\s*([0-9]{1,5}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
             RegexOption.IGNORE_CASE
-        )
-        prefixRe.findAll(text).forEach { m ->
+        ).findAll(text).forEach { m ->
             m.groupValues[1].replace(",", "").toDoubleOrNull()?.let { v ->
-                if (v > 0 && v <= 50000) candidates.add(v)
+                if (v in 50.0..50000.0) candidates.add(v)
             }
         }
 
-        // LKR suffix: 893.48 LKR (PickMe format)
-        val suffixRe = Regex(
+        // LKR suffix format: "893.48 LKR" (PickMe)
+        Regex(
             """([0-9]{1,5}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:LKR|Rs\.?|රු\.?|ரூ\.?)""",
             RegexOption.IGNORE_CASE
-        )
-        suffixRe.findAll(text).forEach { m ->
+        ).findAll(text).forEach { m ->
             m.groupValues[1].replace(",", "").toDoubleOrNull()?.let { v ->
-                if (v > 0 && v <= 50000) candidates.add(v)
+                if (v in 50.0..50000.0) candidates.add(v)
             }
         }
 
         if (candidates.isEmpty()) return 0.0
-        // The primary fare is the largest candidate (avoid picking up commission subvalues)
-        return candidates.max()
+        return candidates.max() // Primary fare = largest value found
     }
 
-    // ── Distance Extraction ───────────────────────────────────────────────────
+    // ── Distance extraction ───────────────────────────────────────────────────
 
     private fun extractDistances(text: String): Map<String, Double> {
         var pickup = 0.0
         var trip = 0.0
 
-        // Uber: "(1.9 km) away", "(3.2 km) trip", "(5.2 km) total"
-        val awayRe = Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*away""", RegexOption.IGNORE_CASE)
-        val tripRe = Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*trip""", RegexOption.IGNORE_CASE)
-        val totalRe = Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*total""", RegexOption.IGNORE_CASE)
-
-        // PickMe: "(2mins away, 0.6 km)", "(6 min, 2.08 km)"
-        val pickmeAwayRe = Regex(
-            """away[,\s]+([0-9]+(?:\.[0-9]+)?)\s*km""", RegexOption.IGNORE_CASE
-        )
-        val pickmeTripRe = Regex(
-            """\([0-9]+\s*min[s]?,\s*([0-9]+(?:\.[0-9]+)?)\s*km\)""", RegexOption.IGNORE_CASE
-        )
-
-        awayRe.find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
-            if (v in 0.1..150.0) pickup = v
-        }
-        pickmeAwayRe.find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
-            if (pickup == 0.0 && v in 0.1..150.0) pickup = v
-        }
-
-        tripRe.find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
-            if (v in 0.1..200.0) trip = v
-        }
-        pickmeTripRe.find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
-            if (trip == 0.0 && v in 0.1..200.0) trip = v
-        }
-
-        // If still empty, try "total" line and fallback generic km scan
-        if (pickup == 0.0 && trip == 0.0) {
-            totalRe.find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { total ->
-                if (total in 0.1..200.0) trip = total
+        // Uber format: "(1.9 km) away", "(3.2 km) trip", "(5.2 km) total"
+        Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*away""", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
+                if (v in 0.1..150.0) pickup = v
             }
+
+        Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*trip""", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
+                if (v in 0.1..200.0) trip = v
+            }
+
+        // PickMe format: "away, 0.6 km", "(6 min, 2.08 km)"
+        if (pickup == 0.0) {
+            Regex("""away[,\s]+([0-9]+(?:\.[0-9]+)?)\s*km""", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
+                    if (v in 0.1..150.0) pickup = v
+                }
         }
 
-        // Last resort: generic km numbers — assign first = pickup, second = trip
+        if (trip == 0.0) {
+            Regex("""\([0-9]+\s*min[s]?,\s*([0-9]+(?:\.[0-9]+)?)\s*km\)""", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
+                    if (v in 0.1..200.0) trip = v
+                }
+        }
+
+        // Total fallback
         if (pickup == 0.0 && trip == 0.0) {
-            val genericKm = Regex("""([0-9]+(?:\.[0-9]+)?)\s*km\b""", RegexOption.IGNORE_CASE)
-            val found = genericKm.findAll(text).mapNotNull { m ->
-                m.groupValues[1].toDoubleOrNull()?.takeIf { it in 0.1..200.0 }
-            }.toList()
+            Regex("""\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*total""", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { v ->
+                    if (v in 0.1..200.0) trip = v
+                }
+        }
+
+        // Last resort: all bare km numbers
+        if (pickup == 0.0 && trip == 0.0) {
+            val found = Regex("""(?<!\()\b([0-9]+(?:\.[0-9]+)?)\s*km\b""", RegexOption.IGNORE_CASE)
+                .findAll(text)
+                .mapNotNull { m -> m.groupValues[1].toDoubleOrNull()?.takeIf { it in 0.1..200.0 } }
+                .toList()
             when {
                 found.size >= 2 -> { pickup = found[0]; trip = found[1] }
                 found.size == 1 -> trip = found[0]
@@ -321,57 +315,45 @@ class RideBuddyAccessibilityService : AccessibilityService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "RideBuddy Fare Alerts",
-                NotificationManager.IMPORTANCE_HIGH
+                CHANNEL_ID, "RideBuddy Fare Alerts", NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Real-time fare profit alerts"
                 enableVibration(true)
-                setShowBadge(true)
             }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(channel)
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
         }
     }
 
     private fun showFareNotification(
-        platform: String,
-        grossFare: Double,
-        netFare: Double,
-        totalKm: Double,
-        farePerKm: Double,
-        isProfitable: Boolean,
+        platform: String, grossFare: Double, netFare: Double,
+        totalKm: Double, farePerKm: Double, isProfitable: Boolean,
     ) {
-        val launchIntent = packageManager.getLaunchIntentForPackage(OWN_PACKAGE)
         val pi = PendingIntent.getActivity(
-            this, 0, launchIntent,
+            this, 0,
+            packageManager.getLaunchIntentForPackage(OWN_PACKAGE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val emoji = if (isProfitable) "✅" else "⚠️"
-        val title = "$emoji $platform — Rs.${farePerKm.format1}/km"
-        val body = "Gross: Rs.${grossFare.format0} | Net: Rs.${netFare.format0} | ${totalKm.format1}km"
+        val title = "$emoji $platform — Rs.${String.format("%.1f", farePerKm)}/km"
+        val body = "Gross: Rs.${String.format("%.0f", grossFare)} | Net: Rs.${String.format("%.0f", netFare)} | ${String.format("%.1f", totalKm)}km"
 
-        val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
+            @Suppress("DEPRECATION") Notification.Builder(this)
         }
+
+        val notif = builder
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
             .setContentText(body)
             .setContentIntent(pi)
             .setAutoCancel(true)
-            .setOnlyAlertOnce(false)
             .build()
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_ID, notif)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIF_ID, notif)
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private val Double.format0 get() = String.format("%.0f", this)
-    private val Double.format1 get() = String.format("%.1f", this)
 }

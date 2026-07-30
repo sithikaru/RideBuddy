@@ -118,9 +118,13 @@ class BackgroundServiceManager {
           // Never process RideBuddy's own notifications
           if (lowerPkg.contains('ridebuddy')) return;
 
-          // Only target known driver apps
-          const targetPkgs = ['ubercab', 'uber', 'pickme', 'helago'];
-          final isTarget = targetPkgs.any((p) => lowerPkg.contains(p));
+          // Only target known DRIVER apps (exact package names from device)
+          const targetPkgs = [
+            'com.ubercab.driver',
+            'com.pickme.driver.byod',
+            'lk.bhasha.helago.driver',
+          ];
+          final isTarget = targetPkgs.contains(pkg);
           if (!isTarget) return;
 
           final title = event.title ?? '';
