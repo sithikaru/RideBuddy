@@ -81,5 +81,29 @@ void main() {
       expect(result.netFare, equals(135.0));
       expect(result.farePerKm, equals(45.0));
     });
+
+    test('Live Uber Screenshot 4: LKR278.54 Cash Payment Request', () {
+      const sampleText = '''
+        Moto LKR278.54 Cash payment ⭐ 4.85
+        23 mins (7.4 km) total
+        7 mins (2.0 km) away Daybridge International School, WP 10390
+        16 mins (5.3 km) trip Charlemont Rd
+        +LKR13.00 premium Match
+      ''';
+
+      final result = ParserEngine.parse(
+        rawText: sampleText,
+        packageName: 'com.ubercab',
+        settings: settings,
+      );
+
+      expect(result.platform, equals('Uber'));
+      expect(result.grossFare, equals(278.54));
+      expect(result.pickupDistanceKm, equals(2.0));
+      expect(result.tripDistanceKm, equals(5.3));
+      expect(result.totalDistanceKm, closeTo(7.3, 0.01));
+      expect(result.netFare, closeTo(250.686, 0.01));
+      expect(result.farePerKm, closeTo(34.34, 0.05));
+    });
   });
 }

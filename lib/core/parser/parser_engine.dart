@@ -11,7 +11,6 @@ class ParserEngine {
   }) {
     final platform = _detectPlatform(packageName, rawText);
     final commissionPercent = _getCommissionForPlatform(platform, settings);
-    final vehicleCategory = _detectCategory(rawText);
 
     final grossFare = _extractGrossFare(rawText);
     final distanceData = _extractDistances(rawText);
@@ -79,16 +78,6 @@ class ParserEngine {
     }
   }
 
-  static String _detectCategory(String text) {
-    final lower = text.toLowerCase();
-    if (lower.contains('flash')) return 'FLASH (Parcel)';
-    if (lower.contains('moto') || lower.contains('bike')) return 'Moto / Bike';
-    if (lower.contains('tuk') || lower.contains('auto')) return 'Tuk / Auto';
-    if (lower.contains('flex') || lower.contains('mini')) return 'Mini / Flex';
-    if (lower.contains('car') || lower.contains('premier')) return 'Car / Premier';
-    return 'Standard';
-  }
-
   /// Extract gross fare with support for:
   /// - LKR210.61, LKR150, LKR 150.00
   /// - 152.15 LKR, 893.48 LKR (PickMe format where LKR is suffix)
@@ -105,7 +94,9 @@ class ParserEngine {
       final rawNum = match.group(1)?.replaceAll(',', '');
       if (rawNum != null) {
         final val = double.tryParse(rawNum);
-        if (val != null && val > 0) candidates.add(val);
+        if (val != null && val > 0 && val <= 50000.0) {
+          candidates.add(val);
+        }
       }
     }
 
@@ -118,13 +109,15 @@ class ParserEngine {
       final rawNum = match.group(1)?.replaceAll(',', '');
       if (rawNum != null) {
         final val = double.tryParse(rawNum);
-        if (val != null && val > 0) candidates.add(val);
+        if (val != null && val > 0 && val <= 50000.0) {
+          candidates.add(val);
+        }
       }
     }
 
     if (candidates.isEmpty) return 0.0;
 
-    // Return the primary fare (maximum value amongst parsed currency candidates)
+    // Return the primary fare (maximum value amongst parsed currency candidates <= 50,000)
     candidates.sort((a, b) => b.compareTo(a));
     return candidates.first;
   }
@@ -142,17 +135,23 @@ class ParserEngine {
     final totalMatch = totalExp.firstMatch(text);
     double? totalFromText;
     if (totalMatch != null) {
-      totalFromText = double.tryParse(totalMatch.group(1) ?? '');
+      final val = double.tryParse(totalMatch.group(1) ?? '');
+      if (val != null && val > 0 && val <= 200.0) {
+        totalFromText = val;
+      }
     }
 
     // B. Pickup Distance: e.g. "6 mins (1.9 km) away" or "2mins away, 0.6 km" or "(0.5 km) away"
     final pickupExp1 = RegExp(r'\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*away', caseSensitive: false);
     final pickupExp2 = RegExp(r'away,\s*([0-9]+(?:\.[0-9]+)?)\s*km', caseSensitive: false);
-    final pickupExp3 = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*(?:km|m)\s*pickup', caseSensitive: false);
+    final pickupExp3 = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*km\s*pickup', caseSensitive: false);
 
     var matchP = pickupExp1.firstMatch(text) ?? pickupExp2.firstMatch(text) ?? pickupExp3.firstMatch(text);
     if (matchP != null) {
-      pickup = double.tryParse(matchP.group(1) ?? '') ?? 0.0;
+      final pVal = double.tryParse(matchP.group(1) ?? '');
+      if (pVal != null && pVal > 0 && pVal <= 150.0) {
+        pickup = pVal;
+      }
     }
 
     // C. Trip Distance: e.g. "9 mins (3.2 km) trip" or "(6 min, 2.08 km)" or "(33 min, 13.32 km)"
@@ -161,19 +160,25 @@ class ParserEngine {
 
     var matchT = tripExp1.firstMatch(text) ?? tripExp2.firstMatch(text);
     if (matchT != null) {
-      trip = double.tryParse(matchT.group(1) ?? '') ?? 0.0;
+      final tVal = double.tryParse(matchT.group(1) ?? '');
+      if (tVal != null && tVal > 0 && tVal <= 200.0) {
+        trip = tVal;
+      }
     }
 
-    // D. Fallback if specific patterns didn't match: parse all (X.X km) or (X.X m) occurrences
+    // D. Fallback if specific patterns didn't match: parse explicit (X.X km) or (X.X m) occurrences
     if (pickup == 0.0 && trip == 0.0) {
-      final allKmExp = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b', caseSensitive: false);
+      final allKmExp = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*(km|kms|meter|meters)\b', caseSensitive: false);
       final matches = allKmExp.allMatches(text).toList();
       final List<double> extracted = [];
       for (final m in matches) {
         final val = double.tryParse(m.group(1) ?? '');
         final unit = m.group(2)?.toLowerCase();
-        if (val != null && val > 0) {
-          extracted.add(unit == 'm' ? val / 1000.0 : val);
+        if (val != null && val > 0 && val <= 200.0) {
+          final inKm = (unit == 'meter' || unit == 'meters') ? val / 1000.0 : val;
+          if (inKm >= 0.1 && inKm <= 200.0) {
+            extracted.add(inKm);
+          }
         }
       }
 
@@ -189,6 +194,10 @@ class ParserEngine {
         }
       }
     }
+
+    // Bounds check
+    if (pickup > 150.0) pickup = 0.0;
+    if (trip > 200.0) trip = 0.0;
 
     return {
       'pickup': pickup,

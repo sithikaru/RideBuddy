@@ -81,10 +81,12 @@ class BackgroundServiceManager {
           final isTargetPkg = targetPackages.any((p) => lowerPkg.contains(p));
           final hasRideKeywords = lowerText.contains('lkr') ||
               lowerText.contains('rs') ||
-              (lowerText.contains('away') && lowerText.contains('trip')) ||
+              lowerText.contains('km') ||
+              lowerText.contains('away') ||
+              lowerText.contains('trip') ||
               lowerText.contains('total') ||
               lowerText.contains('match') ||
-              lowerText.contains('accept trip');
+              lowerText.contains('accept');
 
           if (isTargetPkg || hasRideKeywords) {
             debugPrint("[RideBuddy Accessibility Captured] ($pkg): $combinedText");
@@ -132,9 +134,8 @@ class BackgroundServiceManager {
     }
     if (event.subNodes != null) {
       for (final child in event.subNodes!) {
-        final childText = _extractAllText(child);
-        if (childText.isNotEmpty) {
-          texts.add(childText);
+        if (child.text != null && child.text!.isNotEmpty && child.text != 'null') {
+          texts.add(child.text!);
         }
       }
     }
@@ -151,9 +152,12 @@ class BackgroundServiceManager {
       settings: settings,
     );
 
-    // Only present overlay and record if BOTH gross fare AND distance are extracted
-    if (fareResult.grossFare > 0 && fareResult.totalDistanceKm > 0) {
-      final fareKey = "${fareResult.platform}_${fareResult.grossFare}_${fareResult.totalDistanceKm.toStringAsFixed(1)}";
+    // Only present overlay and record if BOTH valid gross fare AND realistic distance are extracted
+    if (fareResult.grossFare > 0 &&
+        fareResult.totalDistanceKm >= 0.2 &&
+        fareResult.totalDistanceKm <= 200.0) {
+      final fareKey =
+          "${fareResult.platform}_${fareResult.grossFare.toStringAsFixed(0)}_${fareResult.totalDistanceKm.toStringAsFixed(1)}";
       
       // Prevent spamming identical calculations 50 times per second
       if (_lastCapturedFareKey == fareKey) return;
