@@ -9,6 +9,12 @@ android {
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
+    externalNativeBuild {
+        cmake {
+            version = "3.22.1"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

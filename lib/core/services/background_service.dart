@@ -14,9 +14,10 @@ typedef FareCalculatedCallback = void Function(FareResult result);
 
 class BackgroundServiceManager {
   static final List<String> targetPackages = [
-    'com.ubercab.driver',
-    'com.pickme.driver',
-    'com.helago.driver',
+    'ubercab',
+    'uber',
+    'pickme',
+    'helago',
   ];
 
   StreamSubscription? _accessibilitySub;
@@ -74,15 +75,20 @@ class BackgroundServiceManager {
 
           if (combinedText.isEmpty) return;
 
-          // Battery Optimization: Only parse target ride hailing packages
-          final isTargetApp = targetPackages.any((p) => pkg.toLowerCase().contains(p)) ||
-              combinedText.toLowerCase().contains('uber') ||
-              combinedText.toLowerCase().contains('pickme') ||
-              combinedText.toLowerCase().contains('helago');
+          final lowerPkg = pkg.toLowerCase();
+          final lowerText = combinedText.toLowerCase();
 
-          if (!isTargetApp) return;
+          final isTargetPkg = targetPackages.any((p) => lowerPkg.contains(p));
+          final hasRideKeywords = lowerText.contains('lkr') ||
+              lowerText.contains('rs') ||
+              (lowerText.contains('away') && lowerText.contains('trip')) ||
+              lowerText.contains('total') ||
+              lowerText.contains('match') ||
+              lowerText.contains('accept trip');
 
-          _processRawText(combinedText, pkg, storageService);
+          if (isTargetPkg || hasRideKeywords) {
+            _processRawText(combinedText, pkg, storageService);
+          }
         });
       }
     } catch (e) {
@@ -99,12 +105,16 @@ class BackgroundServiceManager {
           final content = event.content ?? '';
           final fullNotif = "$title $content";
 
-          final isTargetPkg = targetPackages.any((p) => pkg.toLowerCase().contains(p)) ||
-              fullNotif.toLowerCase().contains('uber') ||
-              fullNotif.toLowerCase().contains('pickme') ||
-              fullNotif.toLowerCase().contains('helago');
+          final lowerPkg = pkg.toLowerCase();
+          final lowerText = fullNotif.toLowerCase();
 
-          if (isTargetPkg) {
+          final isTargetPkg = targetPackages.any((p) => lowerPkg.contains(p));
+          final hasRideKeywords = lowerText.contains('lkr') ||
+              lowerText.contains('rs') ||
+              lowerText.contains('away') ||
+              lowerText.contains('trip');
+
+          if (isTargetPkg || hasRideKeywords) {
             _processRawText(fullNotif, pkg, storageService);
           }
         });

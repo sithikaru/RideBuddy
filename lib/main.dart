@@ -11,6 +11,7 @@ import 'features/permissions/permission_dashboard_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'providers/app_providers.dart';
 
+@pragma('vm:entry-point')
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final storageService = await StorageService.init();
@@ -60,21 +61,38 @@ class MainNavigationScreen extends ConsumerStatefulWidget {
   ConsumerState<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
+class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    // Start background listeners
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final storage = ref.read(storageServiceProvider);
-      final bgManager = ref.read(backgroundServiceManagerProvider);
-      bgManager.startService(storage);
-      bgManager.onFareCalculated = (_) {
-        ref.read(fareHistoryProvider.notifier).refresh();
-      };
+      _initBackgroundService();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _initBackgroundService();
+    }
+  }
+
+  void _initBackgroundService() {
+    final storage = ref.read(storageServiceProvider);
+    final bgManager = ref.read(backgroundServiceManagerProvider);
+    bgManager.startService(storage);
+    bgManager.onFareCalculated = (_) {
+      ref.read(fareHistoryProvider.notifier).refresh();
+    };
   }
 
   @override
@@ -346,22 +364,63 @@ class DashboardTab extends ConsumerWidget {
 
   void _showSimulationDialog(BuildContext context, WidgetRef ref) {
     final textCtrl = TextEditingController(
-      text: "Uber Trip Request: Pickup 1.5 km away. Dropoff 5.0 km. Fare: Rs. 850.00",
+      text: "Moto LKR210.61 ⚡ 16 mins (5.2 km) total 6 mins (1.9 km) away 9 mins (3.2 km) trip +LKR16.00 premium",
     );
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Simulate Ride Request Text', style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: textCtrl,
-          maxLines: 3,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'Enter sample driver screen text...',
-            hintStyle: TextStyle(color: Colors.white38),
-            border: OutlineInputBorder(),
+        title: const Text('Simulate Driver App Scenario', style: TextStyle(color: Colors.white)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Preset Scenarios:', style: TextStyle(color: Colors.white54, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ActionChip(
+                    label: const Text('Uber LKR 210'),
+                    backgroundColor: Colors.white10,
+                    labelStyle: const TextStyle(color: Colors.amber, fontSize: 12),
+                    onPressed: () {
+                      textCtrl.text = "Moto LKR210.61 ⚡ 16 mins (5.2 km) total 6 mins (1.9 km) away 9 mins (3.2 km) trip +LKR16.00 premium";
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('PickMe 152 LKR'),
+                    backgroundColor: Colors.white10,
+                    labelStyle: const TextStyle(color: Colors.amber, fontSize: 12),
+                    onPressed: () {
+                      textCtrl.text = "152.15 LKR BIKE 💵 (2mins away, 0.6 km) (6 min, 2.08 km) Accept trip";
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('PickMe FLASH'),
+                    backgroundColor: Colors.white10,
+                    labelStyle: const TextStyle(color: Colors.amber, fontSize: 12),
+                    onPressed: () {
+                      textCtrl.text = "893.48 LKR FLASH Galle Road (2mins away, 0.4 km) (33 min, 13.32 km) 🔥 + LKR 75";
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: textCtrl,
+                maxLines: 3,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  hintText: 'Enter sample driver screen text...',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -386,7 +445,7 @@ class DashboardTab extends ConsumerWidget {
               ref.read(fareHistoryProvider.notifier).refresh();
               await OverlayService.showProfitOverlay(result);
             },
-            child: const Text('PARSER TEST & OVERLAY'),
+            child: const Text('TEST & OVERLAY'),
           ),
         ],
       ),

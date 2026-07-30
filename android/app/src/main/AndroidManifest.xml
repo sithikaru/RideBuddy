@@ -39,6 +39,31 @@
             android:name="isAccessibilityTool"
             android:value="false" />
 
+        <!-- Accessibility Listener Service for RideBuddy -->
+        <service
+            android:name="slayer.accessibility.service.flutter_accessibility_service.AccessibilityListener"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:label="RideBuddy Fare Listener">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Notification Listener Service for RideBuddy -->
+        <service
+            android:name="notification.listener.service.NotificationListener"
+            android:label="RideBuddy Notification Scraper"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

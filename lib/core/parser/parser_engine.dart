@@ -2,7 +2,8 @@ import '../models/driver_settings.dart';
 import '../models/fare_result.dart';
 
 class ParserEngine {
-  /// Extract fare, pickup distance, and trip distance from raw text node or notification string.
+  /// Extract fare, pickup distance, trip distance, vehicle category, and surge bonus
+  /// from raw screen text or notifications for Uber & PickMe (In-app, Pop-up Overlay, Flash/Parcel).
   static FareResult parse({
     required String rawText,
     required String packageName,
@@ -10,21 +11,13 @@ class ParserEngine {
   }) {
     final platform = _detectPlatform(packageName, rawText);
     final commissionPercent = _getCommissionForPlatform(platform, settings);
+    final vehicleCategory = _detectCategory(rawText);
 
-    final fares = _extractFares(rawText);
-    final distances = _extractDistancesInKm(rawText);
+    final grossFare = _extractGrossFare(rawText);
+    final distanceData = _extractDistances(rawText);
 
-    double grossFare = fares.isNotEmpty ? fares.first : 0.0;
-
-    double pickupDistance = 0.0;
-    double tripDistance = 0.0;
-
-    if (distances.length >= 2) {
-      pickupDistance = distances[0];
-      tripDistance = distances[1];
-    } else if (distances.length == 1) {
-      tripDistance = distances[0];
-    }
+    final pickupDistance = distanceData['pickup'] ?? 0.0;
+    final tripDistance = distanceData['trip'] ?? 0.0;
 
     return FareResult(
       platform: platform,
@@ -41,13 +34,35 @@ class ParserEngine {
     final lowerPkg = packageName.toLowerCase();
     final lowerText = text.toLowerCase();
 
-    if (lowerPkg.contains('uber') || lowerText.contains('uber')) {
+    // 1. Package Name Identification
+    if (lowerPkg.contains('ubercab') || lowerPkg.contains('uber')) {
       return 'Uber';
-    } else if (lowerPkg.contains('pickme') || lowerText.contains('pickme')) {
+    }
+    if (lowerPkg.contains('pickme')) {
       return 'PickMe';
-    } else if (lowerPkg.contains('helago') || lowerText.contains('helago')) {
+    }
+    if (lowerPkg.contains('helago')) {
       return 'Helago';
     }
+
+    // 2. Layout Signature Identification (for pop-up banners over home screen or other apps)
+    if (lowerText.contains('accept trip') ||
+        lowerText.contains('trip scanner') ||
+        lowerText.contains('flash') ||
+        RegExp(r'[0-9.]+\s*lkr').hasMatch(lowerText)) {
+      return 'PickMe';
+    }
+
+    if (lowerText.contains('match') ||
+        lowerText.contains('total') ||
+        RegExp(r'lkr\s*[0-9.]').hasMatch(lowerText)) {
+      return 'Uber';
+    }
+
+    if (lowerText.contains('helago')) {
+      return 'Helago';
+    }
+
     return 'Driver App';
   }
 
@@ -64,69 +79,120 @@ class ParserEngine {
     }
   }
 
-  /// Extract currency values formatted like LKR 500, Rs. 1,200.00, Rs 450
-  static List<double> _extractFares(String text) {
-    final List<double> results = [];
-    final regExp = RegExp(
-      r'(?:LKR|Rs\.?)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)',
+  static String _detectCategory(String text) {
+    final lower = text.toLowerCase();
+    if (lower.contains('flash')) return 'FLASH (Parcel)';
+    if (lower.contains('moto') || lower.contains('bike')) return 'Moto / Bike';
+    if (lower.contains('tuk') || lower.contains('auto')) return 'Tuk / Auto';
+    if (lower.contains('flex') || lower.contains('mini')) return 'Mini / Flex';
+    if (lower.contains('car') || lower.contains('premier')) return 'Car / Premier';
+    return 'Standard';
+  }
+
+  /// Extract gross fare with support for:
+  /// - LKR210.61, LKR150, LKR 150.00
+  /// - 152.15 LKR, 893.48 LKR (PickMe format where LKR is suffix)
+  /// - Rs. 850.00, රු. 500, ரூ. 500
+  static double _extractGrossFare(String text) {
+    final List<double> candidates = [];
+
+    // 1. Check LKR prefix (e.g. LKR210.61, LKR 150)
+    final prefixExp = RegExp(
+      r'(?:LKR|Rs\.?|රු\.?|ரூ\.?)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)',
       caseSensitive: false,
     );
-
-    final matches = regExp.allMatches(text);
-    for (final match in matches) {
+    for (final match in prefixExp.allMatches(text)) {
       final rawNum = match.group(1)?.replaceAll(',', '');
       if (rawNum != null) {
         final val = double.tryParse(rawNum);
-        if (val != null && val > 0) {
-          results.add(val);
-        }
+        if (val != null && val > 0) candidates.add(val);
       }
     }
 
-    // Fallback: If no currency prefix found, search for numbers followed by LKR or Rs
-    if (results.isEmpty) {
-      final fallbackExp = RegExp(
-        r'([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:LKR|Rs\.?)',
-        caseSensitive: false,
-      );
-      final fallbackMatches = fallbackExp.allMatches(text);
-      for (final match in fallbackMatches) {
-        final rawNum = match.group(1)?.replaceAll(',', '');
-        if (rawNum != null) {
-          final val = double.tryParse(rawNum);
-          if (val != null && val > 0) {
-            results.add(val);
-          }
-        }
-      }
-    }
-
-    return results;
-  }
-
-  /// Extract distances in kilometers. Handles "km" and "m" (meters converted to km).
-  static List<double> _extractDistancesInKm(String text) {
-    final List<double> results = [];
-    final regExp = RegExp(
-      r'([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b',
+    // 2. Check LKR suffix (e.g. 152.15 LKR, 893.48 LKR - PickMe format)
+    final suffixExp = RegExp(
+      r'([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:LKR|Rs\.?|රු\.?|ரூ\.?)',
       caseSensitive: false,
     );
+    for (final match in suffixExp.allMatches(text)) {
+      final rawNum = match.group(1)?.replaceAll(',', '');
+      if (rawNum != null) {
+        final val = double.tryParse(rawNum);
+        if (val != null && val > 0) candidates.add(val);
+      }
+    }
 
-    final matches = regExp.allMatches(text);
-    for (final match in matches) {
-      final valueStr = match.group(1);
-      final unit = match.group(2)?.toLowerCase();
-      if (valueStr != null && unit != null) {
-        final val = double.tryParse(valueStr);
+    if (candidates.isEmpty) return 0.0;
+
+    // Return the primary fare (maximum value amongst parsed currency candidates)
+    candidates.sort((a, b) => b.compareTo(a));
+    return candidates.first;
+  }
+
+  /// Extract pickup and trip distances in kilometers
+  /// Handles:
+  /// - Uber format: "6 mins (1.9 km) away", "9 mins (3.2 km) trip", "16 mins (5.2 km) total"
+  /// - PickMe format: "(2mins away, 0.6 km)", "(6 min, 2.08 km)", "(33 min, 13.32 km)"
+  static Map<String, double> _extractDistances(String text) {
+    double pickup = 0.0;
+    double trip = 0.0;
+
+    // A. Uber Total Distance line: e.g. "16 mins (5.2 km) total"
+    final totalExp = RegExp(r'\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*total', caseSensitive: false);
+    final totalMatch = totalExp.firstMatch(text);
+    double? totalFromText;
+    if (totalMatch != null) {
+      totalFromText = double.tryParse(totalMatch.group(1) ?? '');
+    }
+
+    // B. Pickup Distance: e.g. "6 mins (1.9 km) away" or "2mins away, 0.6 km" or "(0.5 km) away"
+    final pickupExp1 = RegExp(r'\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*away', caseSensitive: false);
+    final pickupExp2 = RegExp(r'away,\s*([0-9]+(?:\.[0-9]+)?)\s*km', caseSensitive: false);
+    final pickupExp3 = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*(?:km|m)\s*pickup', caseSensitive: false);
+
+    var matchP = pickupExp1.firstMatch(text) ?? pickupExp2.firstMatch(text) ?? pickupExp3.firstMatch(text);
+    if (matchP != null) {
+      pickup = double.tryParse(matchP.group(1) ?? '') ?? 0.0;
+    }
+
+    // C. Trip Distance: e.g. "9 mins (3.2 km) trip" or "(6 min, 2.08 km)" or "(33 min, 13.32 km)"
+    final tripExp1 = RegExp(r'\(([0-9]+(?:\.[0-9]+)?)\s*km\)\s*trip', caseSensitive: false);
+    final tripExp2 = RegExp(r'\([0-9]+\s*min[s]?,\s*([0-9]+(?:\.[0-9]+)?)\s*km\)', caseSensitive: false);
+
+    var matchT = tripExp1.firstMatch(text) ?? tripExp2.firstMatch(text);
+    if (matchT != null) {
+      trip = double.tryParse(matchT.group(1) ?? '') ?? 0.0;
+    }
+
+    // D. Fallback if specific patterns didn't match: parse all (X.X km) or (X.X m) occurrences
+    if (pickup == 0.0 && trip == 0.0) {
+      final allKmExp = RegExp(r'([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b', caseSensitive: false);
+      final matches = allKmExp.allMatches(text).toList();
+      final List<double> extracted = [];
+      for (final m in matches) {
+        final val = double.tryParse(m.group(1) ?? '');
+        final unit = m.group(2)?.toLowerCase();
         if (val != null && val > 0) {
-          if (unit == 'km') {
-            results.add(val);
-          } else if (unit == 'm') {
-            results.add(val / 1000.0);
-          }
+          extracted.add(unit == 'm' ? val / 1000.0 : val);
+        }
+      }
+
+      if (extracted.length >= 2) {
+        pickup = extracted[0];
+        trip = extracted[1];
+      } else if (extracted.length == 1) {
+        if (totalFromText != null && totalFromText > extracted[0]) {
+          pickup = extracted[0];
+          trip = totalFromText - pickup;
+        } else {
+          trip = extracted[0];
         }
       }
     }
-    return results;
+
+    return {
+      'pickup': pickup,
+      'trip': trip,
+    };
   }
 }

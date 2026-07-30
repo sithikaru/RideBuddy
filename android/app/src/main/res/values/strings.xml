@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RideBuddy</string>
+    <string name="accessibility_service_description">RideBuddy reads ride request screen text from Uber, PickMe, and Helago to calculate real-time net fare per km in a floating overlay.</string>
+</resources>
