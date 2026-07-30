@@ -39,17 +39,7 @@ void overlayMain() {
   );
 }
 
-// Entry point required by flutter_accessibility_service plugin
-@pragma('vm:entry-point')
-void accessibilityOverlay() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(
-    const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: SizedBox.shrink(),
-    ),
-  );
-}
+
 
 class OverlayWidget extends StatefulWidget {
   const OverlayWidget({super.key});

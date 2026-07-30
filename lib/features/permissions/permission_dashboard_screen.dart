@@ -97,7 +97,8 @@ class _PermissionDashboardScreenState extends State<PermissionDashboardScreen>
                     subtitle: 'Reads ride request screen view hierarchy from Uber, PickMe, Helago.',
                     isGranted: _accessibilityGranted,
                     onTap: () async {
-                      await BackgroundServiceManager.requestAccessibilityPermission();
+                      // Open Android Accessibility Settings for user to enable RideBuddyAccessibilityService
+                      await openAppSettings();
                     },
                   ),
                   const SizedBox(height: 14),
