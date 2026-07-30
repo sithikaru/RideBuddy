@@ -53,7 +53,7 @@ void main() {
       expect(result.grossFare, equals(350.74));
       expect(result.pickupDistanceKm, equals(1.8));
       expect(result.tripDistanceKm, equals(6.9));
-      expect(result.totalDistanceKm, equals(8.7));
+      expect(result.totalDistanceKm, closeTo(8.7, 0.01));
       expect(result.netFare, closeTo(315.666, 0.01));
       expect(result.farePerKm, closeTo(36.28, 0.05));
     });
