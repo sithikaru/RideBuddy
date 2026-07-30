@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:notification_listener_service/notification_listener_service.dart';
@@ -31,14 +32,9 @@ class BackgroundServiceManager {
     }
   }
 
-  /// Check if accessibility permission is enabled (uses platform check)
+  /// Check if accessibility permission is enabled (delegates to native service status)
   static Future<bool> isAccessibilityGranted() async {
-    try {
-      final result = await _channel.invokeMethod<bool>('isNativeServiceRunning');
-      return result ?? false;
-    } catch (_) {
-      return false;
-    }
+    return isNativeServiceRunning();
   }
 
   /// Push current settings to the native service via SharedPreferences
@@ -91,7 +87,7 @@ class BackgroundServiceManager {
 
   /// Start background monitoring.
   ///
-  /// Primary source: Native Kotlin AccessibilityService → SharedPreferences poll
+  /// Primary source:   Native Kotlin AccessibilityService → SharedPreferences → 2s poll
   /// Secondary source: NotificationListenerService stream
   Future<void> startService(StorageService storageService) async {
     stopService();
@@ -102,15 +98,13 @@ class BackgroundServiceManager {
     // Push settings to native service (used by Kotlin for commission calc)
     await syncSettingsToNative(settings);
 
-    // ── 1. Poll SharedPreferences for results from native Kotlin service ──────
-    // Native service writes results to SharedPreferences; we poll every 2s.
-    // This works even when Flutter was killed and then resumed.
+    // ── 1. Poll SharedPreferences for native Kotlin results (every 2 seconds) ─
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (!isRunning) return;
       await _pollNativeFare(storageService);
     });
 
-    // ── 2. Notification Listener (secondary source) ───────────────────────────
+    // ── 2. Notification Listener (secondary / fallback source) ────────────────
     try {
       final isNotifGranted = await isNotificationListenerGranted();
       if (isNotifGranted) {
@@ -151,10 +145,9 @@ class BackgroundServiceManager {
     final fareJsonStr = await getLatestNativeFare();
     if (fareJsonStr == null || fareJsonStr.isEmpty) return;
 
-    // Consume it immediately so we don't show it again
+    // Consume it immediately to avoid showing the same fare twice
     await clearLatestNativeFare();
 
-    // Parse the JSON into a FareResult
     try {
       final fareResult = _nativeFareJsonToResult(fareJsonStr, storageService);
       if (fareResult != null) {
@@ -165,10 +158,9 @@ class BackgroundServiceManager {
     }
   }
 
-  FareResult? _nativeFareJsonToResult(String json, StorageService storage) {
+  FareResult? _nativeFareJsonToResult(String jsonStr, StorageService storage) {
     try {
-      // Minimal JSON parsing without external dependency
-      final map = _parseSimpleJson(json);
+      final map = jsonDecode(jsonStr) as Map<String, dynamic>;
       final settings = storage.getSettings();
 
       final platform = map['platform'] as String? ?? 'Driver App';
@@ -195,20 +187,10 @@ class BackgroundServiceManager {
     }
   }
 
-  /// Simple JSON key/value extractor (avoids dart:convert dependency issues in isolates)
-  Map<String, dynamic> _parseSimpleJson(String json) {
-    // Use dart:convert directly
-    try {
-      // ignore: avoid_dynamic_calls
-      return const _JsonDecoder().convert(json) as Map<String, dynamic>;
-    } catch (_) {
-      return {};
-    }
-  }
-
   String? _lastCapturedFareKey;
 
-  void _processRawText(String rawText, String packageName, StorageService storage) {
+  void _processRawText(
+      String rawText, String packageName, StorageService storage) {
     final settings = storage.getSettings();
     final fareResult = ParserEngine.parse(
       rawText: rawText,
@@ -229,7 +211,8 @@ class BackgroundServiceManager {
     }
   }
 
-  Future<void> _presentFareResult(FareResult fareResult, StorageService storage) async {
+  Future<void> _presentFareResult(
+      FareResult fareResult, StorageService storage) async {
     await storage.saveFareResult(fareResult);
 
     final settings = storage.getSettings();
@@ -247,20 +230,4 @@ class BackgroundServiceManager {
     _notificationSub?.cancel();
     _notificationSub = null;
   }
-}
-
-// Lightweight JSON decoder helper
-class _JsonDecoder {
-  const _JsonDecoder();
-  dynamic convert(String source) {
-    // Delegate to dart:convert
-    // ignore: prefer_function_declarations_over_variables
-    return _decode(source);
-  }
-}
-
-dynamic _decode(String source) {
-  // We use dart:convert via import
-  import 'dart:convert' as convert;
-  return convert.jsonDecode(source);
 }
