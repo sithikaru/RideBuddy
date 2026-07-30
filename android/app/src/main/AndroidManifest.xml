@@ -39,9 +39,15 @@
             android:name="isAccessibilityTool"
             android:value="false" />
 
-        <!-- Accessibility Listener Service for RideBuddy -->
+        <!--
+            ╔══════════════════════════════════════════════════════════════╗
+            ║  RideBuddy Native Accessibility Service                      ║
+            ║  Pure Kotlin — NO FlutterEngineCache dependency.             ║
+            ║  Works fully in background when Flutter is killed.           ║
+            ╚══════════════════════════════════════════════════════════════╝
+        -->
         <service
-            android:name="slayer.accessibility.service.flutter_accessibility_service.AccessibilityListener"
+            android:name=".RideBuddyAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true"
             android:label="RideBuddy Fare Listener">
@@ -50,10 +56,10 @@
             </intent-filter>
             <meta-data
                 android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
+                android:resource="@xml/ridebuddy_accessibility_config" />
         </service>
 
-        <!-- Notification Listener Service for RideBuddy -->
+        <!-- Notification Listener Service for RideBuddy (secondary data source) -->
         <service
             android:name="notification.listener.service.NotificationListener"
             android:label="RideBuddy Notification Scraper"
@@ -78,7 +84,7 @@
         </intent>
         <!-- Package visibility queries for target driver apps -->
         <package android:name="com.ubercab.driver" />
-        <package android:name="com.pickme.driver" />
-        <package android:name="com.helago.driver" />
+        <package android:name="com.pickme.driver.byod" />
+        <package android:name="lk.bhasha.helago.driver" />
     </queries>
 </manifest>
