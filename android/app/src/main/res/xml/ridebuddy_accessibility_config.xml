@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    No android:packageNames filter here — Samsung Android 15 doesn't always
+    honour the allowlist correctly when multiple packages are listed.
+    Package filtering is done in Kotlin code instead for reliability.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="300"
-    android:packageNames="com.ubercab.driver,com.ubercab,com.pickme.driver.byod,com.pickme.driver,lk.bhasha.helago.driver" />
+    android:notificationTimeout="300" />
